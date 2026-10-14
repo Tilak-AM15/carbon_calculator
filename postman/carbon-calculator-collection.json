@@ -1,0 +1,132 @@
+{
+  "info": {
+    "name": "Evergreen Carbon Calculator API",
+    "description": "Prototype API checks. Set baseUrl and use a demo account only in a non-production environment.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "basic",
+    "basic": [
+      {
+        "key": "username",
+        "value": "supplier",
+        "type": "string"
+      },
+      {
+        "key": "password",
+        "value": "SupplierDemo123!",
+        "type": "string"
+      }
+    ]
+  },
+  "item": [
+    {
+      "name": "Health",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/actuator/health"
+      }
+    },
+    {
+      "name": "Categories",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/categories"
+      }
+    },
+    {
+      "name": "Factors",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/factors"
+      }
+    },
+    {
+      "name": "Create activity",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"organizationName\": \"Demo Supplier\", \"batchId\": \"BATCH-001\", \"stageName\": \"Raw material supplier\", \"activityName\": \"Purchased raw material\", \"scope\": \"SCOPE_3\", \"categoryCode\": \"CAT_1\", \"quantity\": 100, \"unit\": \"kg\", \"factorId\": 2, \"allocationNumerator\": 100, \"allocationDenominator\": 100, \"eventKey\": \"POSTMAN-BATCH-001-SUPPLIER-01\", \"methodNote\": \"Demo only; replace illustrative factor with a verified, cited factor.\"}"
+        },
+        "url": "{{baseUrl}}/api/activities"
+      }
+    },
+    {
+      "name": "Batch summary",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/batches/BATCH-001/summary"
+      }
+    },
+    {
+      "name": "Current user profile",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/me"
+      }
+    },
+    {
+      "name": "Category evidence status",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/category-status"
+      }
+    },
+    {
+      "name": "Audit history",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/audit"
+      }
+    },
+    {
+      "name": "Reviewer write denial (switch auth to reviewer)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"organizationName\": \"Demo Supplier\", \"batchId\": \"RBAC-TEST\", \"stageName\": \"Supplier\", \"activityName\": \"Reviewer should not create\", \"scope\": \"SCOPE_3\", \"categoryCode\": \"CAT_1\", \"quantity\": 1, \"unit\": \"kg\", \"factorId\": 2, \"allocationNumerator\": 1, \"allocationDenominator\": 1}"
+        },
+        "url": "{{baseUrl}}/api/activities",
+        "description": "Expected: HTTP 403 when collection Basic Auth is changed to reviewer / ReviewerDemo123!."
+      }
+    },
+    {
+      "name": "Cross-organization write denial (stakeholder)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"organizationName\": \"Demo Retailer\", \"batchId\": \"RBAC-TEST\", \"stageName\": \"Retailer\", \"activityName\": \"Cross-organization write should fail\", \"scope\": \"SCOPE_3\", \"categoryCode\": \"CAT_1\", \"quantity\": 1, \"unit\": \"kg\", \"factorId\": 2, \"allocationNumerator\": 1, \"allocationDenominator\": 1}"
+        },
+        "url": "{{baseUrl}}/api/activities",
+        "description": "Expected: HTTP 403 when collection Basic Auth is supplier / SupplierDemo123!."
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080"
+    }
+  ]
+}

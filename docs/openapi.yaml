@@ -1,0 +1,98 @@
+openapi: 3.0.3
+info:
+  title: Evergreen Carbon Calculator API
+  version: 1.0.0-prototype
+  description: >-
+    Prototype API. The live SpringDoc OpenAPI document at /v3/api-docs is authoritative.
+    Demo factors are illustrative and are not verified Climatiq factors.
+servers:
+  - url: http://localhost:8080
+security:
+  - basicAuth: []
+components:
+  securitySchemes:
+    basicAuth:
+      type: http
+      scheme: basic
+  schemas:
+    ActivityRequest:
+      type: object
+      required: [organizationName, batchId, stageName, activityName, scope, categoryCode, quantity, unit, factorId, allocationNumerator, allocationDenominator]
+      properties:
+        organizationName: { type: string, example: Demo Supplier }
+        batchId: { type: string, example: BATCH-001 }
+        stageName: { type: string, example: Raw material supplier }
+        activityName: { type: string, example: Purchased raw material }
+        scope: { type: string, enum: [SCOPE_1, SCOPE_2, SCOPE_3] }
+        categoryCode: { type: string, example: CAT_1 }
+        quantity: { type: number, minimum: 0.00000001 }
+        unit: { type: string, example: kg, description: Must exactly match the selected factor activityUnit; automatic conversion is not implemented. }
+        factorId: { type: integer, format: int64 }
+        allocationNumerator: { type: number, minimum: 0.00000001 }
+        allocationDenominator: { type: number, minimum: 0.00000001 }
+        eventKey: { type: string, nullable: true, description: Optional globally unique key for a physical event to guard against duplicate entry. }
+        methodNote: { type: string, nullable: true, description: Method, factor boundary and assumptions note. }
+paths:
+  /actuator/health:
+    get:
+      security: []
+      summary: Health status
+      responses:
+        '200': { description: Application health }
+  /api/me:
+    get:
+      summary: Current authenticated user
+      responses:
+        '200': { description: Username, role and organization }
+        '401': { description: Authentication required }
+  /api/categories:
+    get:
+      summary: Scope and category catalogue
+      responses:
+        '200': { description: Scope 1, Scope 2 and Scope 3 category choices }
+  /api/category-status:
+    get:
+      summary: Category evidence status
+      responses:
+        '200': { description: Category status and reason; unavailable evidence is not treated as zero }
+  /api/factors:
+    get:
+      summary: Emission factor catalogue
+      responses:
+        '200': { description: Factor values, units and source notes }
+  /api/activities:
+    get:
+      summary: List permitted activities
+      responses:
+        '200': { description: Activities permitted by role and organization }
+        '401': { description: Authentication required }
+    post:
+      summary: Create and calculate an activity
+      description: Admin or stakeholder only. Stakeholders may create for their own organization. Reviewer is read-only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ActivityRequest' }
+      responses:
+        '201': { description: Saved activity and backend calculation result }
+        '400': { description: Validation, category, factor, unit or allocation error }
+        '401': { description: Authentication required }
+        '403': { description: Role or organization restriction }
+        '409': { description: Duplicate physical event key }
+  /api/batches/{batchId}/summary:
+    get:
+      summary: Batch activity summary
+      parameters:
+        - name: batchId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: kg CO2e, tonnes CO2e and permitted rows grouped by scope/category/stage }
+        '401': { description: Authentication required }
+  /api/audit:
+    get:
+      summary: Read permitted audit events
+      responses:
+        '200': { description: Audit events visible to the current role and organization }

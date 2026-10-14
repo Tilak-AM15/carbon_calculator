@@ -1,0 +1,1 @@
+export default { content: ['./index.html', './src/**/*.{js,jsx}'], theme: { extend: { fontFamily: { display: ['Manrope','sans-serif'] }, boxShadow: { soft: '0 10px 35px rgba(28, 54, 40, .055)' } } }, plugins: [] }

@@ -1,0 +1,11 @@
+{
+  "id": "carbon-calculator-environment",
+  "name": "Carbon Calculator - Environment (no secrets)",
+  "values": [
+    { "key": "baseUrl", "value": "http://localhost:8080", "type": "default", "enabled": true },
+    { "key": "username", "value": "supplier", "type": "default", "enabled": true },
+    { "key": "password", "value": "SupplierDemo123!", "type": "secret", "enabled": true }
+  ],
+  "_postman_variable_scope": "environment",
+  "_postman_exported_using": "Postman/11"
+}
