@@ -1,7 +1,11 @@
 package com.example.carbon;
 
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
-import jakarta.validation.constraints.*;
+import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
@@ -15,144 +19,638 @@ import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api")
-class ActivityController {
-    private final ActivityRepository activities;
-    private final FactorRepository factors;
+@Tag(name = "Carbon Calculator REST APIs", description = "Endpoints for supply chain emissions tracking, RBAC, Climatiq factor selection, unit conversions, and double-counting prevention.")
+public class ActivityController {
+
+    private final EmissionActivityRepository activities;
+    private final EmissionFactorRepository factors;
     private final AppUserRepository users;
+    private final OrganizationRepository organizations;
+    private final FacilityRepository facilities;
+    private final ProductRepository products;
+    private final BatchRepository batches;
+    private final StageTransferRepository transfers;
+    private final CategoryConfigRepository categoryConfigs;
     private final AuditEventRepository audit;
+    private final CalculationEngine calculationEngine;
 
-    ActivityController(ActivityRepository activities, FactorRepository factors, AppUserRepository users, AuditEventRepository audit) {
-        this.activities=activities; this.factors=factors; this.users=users; this.audit=audit;
+    public ActivityController(
+            EmissionActivityRepository activities,
+            EmissionFactorRepository factors,
+            AppUserRepository users,
+            OrganizationRepository organizations,
+            FacilityRepository facilities,
+            ProductRepository products,
+            BatchRepository batches,
+            StageTransferRepository transfers,
+            CategoryConfigRepository categoryConfigs,
+            AuditEventRepository audit,
+            CalculationEngine calculationEngine
+    ) {
+        this.activities = activities;
+        this.factors = factors;
+        this.users = users;
+        this.organizations = organizations;
+        this.facilities = facilities;
+        this.products = products;
+        this.batches = batches;
+        this.transfers = transfers;
+        this.categoryConfigs = categoryConfigs;
+        this.audit = audit;
+        this.calculationEngine = calculationEngine;
     }
 
-    record ActivityRequest(@NotBlank String organizationName, @NotBlank String batchId,
-        @NotBlank String stageName, @NotBlank String activityName,
-        @NotBlank String scope, @NotBlank String categoryCode,
-        @NotNull @DecimalMin("0.00000001") BigDecimal quantity, @NotBlank String unit,
-        @NotNull Long factorId, @NotNull @DecimalMin("0.00000001") BigDecimal allocationNumerator,
-        @NotNull @DecimalMin("0.00000001") BigDecimal allocationDenominator, String eventKey, String methodNote) {}
-    record CategoryDto(String scope, String code, String label) {}
-    record ActivityDto(Long id, String organizationName, String batchId, String stageName,
-        String activityName, String scope, String categoryCode, BigDecimal quantity, String unit,
-        Long factorId, String factorName, BigDecimal factorSnapshot, BigDecimal emissionsKg,
-        BigDecimal allocationPercent, String createdBy, String createdAt, String eventKey, String methodNote) {}
-    record SummaryDto(String batchId, BigDecimal totalKgCo2e, BigDecimal totalTonnesCo2e,
-        Map<String,BigDecimal> byScope, Map<String,BigDecimal> byCategory,
-        Map<String,BigDecimal> byStage, List<ActivityDto> activities) {}
+    // --- Records and DTOs ---
 
-    record UserDto(String username, String role, String organizationName) {}
-    record CategoryStatusDto(String scope, String code, String label, String status, String reason) {}
+    public record UserDto(String username, String role, String stakeholderRole, String organizationName, String email) {}
 
+    public record ActivityRequest(
+            @NotBlank(message = "organizationName is required") String organizationName,
+            String facilityCode,
+            @NotBlank(message = "batchId is required") String batchId,
+            Integer stageSequence,
+            @NotBlank(message = "stageName is required") String stageName,
+            @NotBlank(message = "activityName is required") String activityName,
+            @NotBlank(message = "scope is required") String scope,
+            @NotBlank(message = "categoryCode is required") String categoryCode,
+            @NotNull(message = "quantity is required") @DecimalMin(value = "0.00000001", message = "quantity must be > 0") BigDecimal quantity,
+            @NotBlank(message = "unit is required") String unit,
+            @NotNull(message = "factorId is required") Long factorId,
+            @NotNull(message = "allocationNumerator is required") @DecimalMin(value = "0.00000001", message = "allocationNumerator must be > 0") BigDecimal allocationNumerator,
+            @NotNull(message = "allocationDenominator is required") @DecimalMin(value = "0.00000001", message = "allocationDenominator must be > 0") BigDecimal allocationDenominator,
+            BigDecimal shippedMassTonnes,
+            BigDecimal distanceKm,
+            String gasSpecificName,
+            Boolean isScope2MarketBased,
+            Boolean isBatchProductAllocated,
+            String lifecycleStage,
+            String eventKey,
+            String transferLegIdentifier,
+            String methodNote,
+            String assumptionsNote
+    ) {}
+
+    public record ActivityDto(
+            Long id,
+            String organizationName,
+            String facilityCode,
+            String batchId,
+            Integer stageSequence,
+            String stageName,
+            String activityName,
+            String scope,
+            String categoryCode,
+            BigDecimal inputQuantity,
+            String inputUnit,
+            BigDecimal standardQuantity,
+            String standardUnit,
+            BigDecimal unitConversionFactor,
+            Long factorId,
+            String factorCode,
+            String factorName,
+            BigDecimal factorSnapshot,
+            String gasSpecificName,
+            BigDecimal gasGwpValue,
+            BigDecimal shippedMassTonnes,
+            BigDecimal distanceKm,
+            BigDecimal calculatedTonneKm,
+            BigDecimal allocationNumerator,
+            BigDecimal allocationDenominator,
+            BigDecimal allocationPercent,
+            BigDecimal rawEmissionsKg,
+            BigDecimal allocatedEmissionsKg,
+            Boolean isScope2MarketBased,
+            Boolean isBatchProductAllocated,
+            String lifecycleStage,
+            String eventKey,
+            String transferLegIdentifier,
+            String methodNote,
+            String assumptionsNote,
+            String createdBy,
+            String createdAt
+    ) {}
+
+    public record StageSummaryDto(
+            int stageSequence,
+            String stageName,
+            String organizationName,
+            BigDecimal incrementalKgCo2e,
+            BigDecimal cumulativeKgCo2e,
+            BigDecimal percentOfTotal
+    ) {}
+
+    public record BatchSummaryDto(
+            String batchId,
+            String productCode,
+            String productName,
+            BigDecimal batchQuantity,
+            String functionalUnit,
+            String reportingPeriod,
+            String organizationalBoundary,
+            BigDecimal totalProductFootprintKgCo2e,
+            BigDecimal totalProductFootprintTonnesCo2e,
+            BigDecimal intensityPerUnitKgCo2e,
+            BigDecimal cradleToRetailKgCo2e,
+            BigDecimal cradleToRetailTonnesCo2e,
+            BigDecimal useAndEndOfLifeKgCo2e,
+            BigDecimal useAndEndOfLifeTonnesCo2e,
+            BigDecimal scope1KgCo2e,
+            BigDecimal scope2LocationBasedKgCo2e,
+            BigDecimal scope2MarketBasedKgCo2e,
+            String scope2AccountingGuidance,
+            BigDecimal scope3KgCo2e,
+            Map<String, BigDecimal> emissionsByScope,
+            Map<String, BigDecimal> emissionsByCategory,
+            Map<String, BigDecimal> emissionsByStakeholder,
+            List<StageSummaryDto> productJourneyStages,
+            List<StageTransfer> stageTransfers,
+            List<ActivityDto> activities,
+            boolean isCradleToRetailComplete,
+            boolean hasFullLifeCycleEstimates,
+            String doubleCountingPreventionNote
+    ) {}
+
+    public record CategoryStatusDto(
+            String code,
+            String scope,
+            Integer categoryNumber,
+            String name,
+            String description,
+            String status,
+            String reason,
+            String lifecycleStage,
+            String standardMethod
+    ) {}
+
+    public record OrgInventoryRowDto(
+            String organizationName,
+            String stakeholderRole,
+            BigDecimal scope1KgCo2e,
+            BigDecimal scope2LocationKgCo2e,
+            BigDecimal scope2MarketKgCo2e,
+            BigDecimal scope3PurchasedKgCo2e,
+            BigDecimal totalCorporateInventoryKgCo2e
+    ) {}
+
+    public record CorporateInventoryReportDto(
+            String reportingPeriod,
+            List<OrgInventoryRowDto> organizationInventories,
+            BigDecimal sumOfAllCorporateInventoriesKgCo2e,
+            BigDecimal reconciledBatchProductFootprintKgCo2e,
+            BigDecimal avoidedDoubleCountingDeltaKgCo2e,
+            String explanation
+    ) {}
+
+    // --- Endpoints ---
+
+    @Operation(summary = "Get current authenticated user profile and permissions")
     @GetMapping("/me")
-    UserDto me(Authentication auth) {
-        AppUser u = users.findByUsername(auth.getName()).orElseThrow();
-        return new UserDto(u.username, u.role, u.organizationName);
+    public UserDto me(Authentication auth) {
+        AppUser u = users.findByUsername(auth.getName()).orElseThrow(
+                () -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User profile not found")
+        );
+        return new UserDto(u.username, u.role, u.stakeholderRole, u.organizationName, u.email);
     }
 
-    @GetMapping("/category-status")
-    List<CategoryStatusDto> categoryStatus() {
-        return Arrays.stream(ScopeCategory.values()).map(c -> new CategoryStatusDto(c.scope, c.code, c.label,
-            "DATA_UNAVAILABLE", "Category is modeled, but a suitable verified factor/activity dataset has not been configured in this prototype." )).toList();
+    @Operation(summary = "List all registered supply chain organizations")
+    @GetMapping("/organizations")
+    public List<Organization> listOrganizations() {
+        return organizations.findAllByOrderByNameAsc();
     }
 
-    @GetMapping("/audit")
-    List<Map<String,Object>> auditEvents(Authentication auth) {
-        boolean admin = hasRole(auth,"ADMIN");
-        boolean reviewer = hasRole(auth,"REVIEWER");
-        AppUser current = users.findByUsername(auth.getName()).orElseThrow();
-        List<AuditEvent> rows = (admin || reviewer) ? audit.findAllByOrderByCreatedAtDesc() : audit.findByOrganizationNameOrderByCreatedAtDesc(current.organizationName);
-        return rows.stream().map(e -> {
-            Map<String,Object> m = new LinkedHashMap<>(); m.put("id",e.id); m.put("username",e.username);
-            m.put("organizationName",e.organizationName); m.put("action",e.action); m.put("recordType",e.recordType);
-            m.put("recordId",e.recordId); m.put("details",e.details); m.put("createdAt",e.createdAt.toString()); return m;
-        }).toList();
+    @Operation(summary = "List facilities, optionally filtered by organization")
+    @GetMapping("/facilities")
+    public List<Facility> listFacilities(@RequestParam(required = false) String organizationName) {
+        if (organizationName != null && !organizationName.isBlank()) {
+            return facilities.findByOrganizationName(organizationName);
+        }
+        return facilities.findAll();
     }
 
+    @Operation(summary = "List products in the catalog")
+    @GetMapping("/products")
+    public List<Product> listProducts() {
+        return products.findAll();
+    }
+
+    @Operation(summary = "List all product production batches")
+    @GetMapping("/batches")
+    public List<ProductBatch> listBatches() {
+        return batches.findAll();
+    }
+
+    @Operation(summary = "Scope & category catalogue")
     @GetMapping("/categories")
-    List<CategoryDto> categories() {
-        return Arrays.stream(ScopeCategory.values())
-            .map(c -> new CategoryDto(c.scope,c.code,c.label)).toList();
+    public List<CategoryConfig> categories() {
+        return categoryConfigs.findAllByOrderByScopeAscCategoryNumberAsc();
     }
 
+    @Operation(summary = "All 15 Scope 3 categories, Scope 1 and Scope 2 with explicit status and reason")
+    @GetMapping("/category-status")
+    public List<CategoryStatusDto> categoryStatus() {
+        return categoryConfigs.findAllByOrderByScopeAscCategoryNumberAsc().stream()
+                .map(c -> new CategoryStatusDto(
+                        c.code, c.scope, c.categoryNumber, c.name, c.description,
+                        c.status, c.statusReason, c.lifecycleStage, c.standardMethod
+                )).toList();
+    }
+
+    @Operation(summary = "Curated Climatiq-cited emission factor catalogue with full provenance metadata")
     @GetMapping("/factors")
-    List<Map<String,Object>> factors() {
-        return this.factors.findAll().stream().map(f -> {
-            Map<String,Object> m = new LinkedHashMap<>();
-            m.put("id", f.id); m.put("factorCode", f.factorCode); m.put("name", f.name);
-            m.put("activityUnit", f.activityUnit); m.put("factorValue", f.factorValue); m.put("sourceNote", f.sourceNote);
-            return m;
-        }).toList();
+    public List<EmissionFactor> factors() {
+        return factors.findAllByOrderByScopeAscCategoryCodeAscNameAsc();
     }
 
+    @Operation(summary = "Create an activity with backend unit conversion, Climatiq factor snapshot, and RBAC enforcement")
     @PostMapping("/activities")
     @ResponseStatus(HttpStatus.CREATED)
-    ActivityDto create(@Valid @RequestBody ActivityRequest req, Authentication auth) {
-        boolean admin = hasRole(auth,"ADMIN");
-        AppUser current = users.findByUsername(auth.getName()).orElseThrow();
-        if (!admin && !current.organizationName.equals(req.organizationName()))
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Cannot create records for another organization");
-        if (req.allocationNumerator().compareTo(req.allocationDenominator()) > 0)
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Allocation numerator cannot exceed denominator");
-        if (req.eventKey() != null && !req.eventKey().isBlank() && activities.findByEventKey(req.eventKey().trim()).isPresent())
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "This physical emission event already exists. Reuse its existing record to avoid double counting.");
-        ScopeCategory cat = Arrays.stream(ScopeCategory.values())
-            .filter(c -> c.code.equals(req.categoryCode()) && c.scope.equals(req.scope())).findFirst()
-            .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown scope/category combination"));
-        EmissionFactor factor = factors.findById(req.factorId())
-            .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Emission factor not found"));
-        if (!factor.activityUnit.equalsIgnoreCase(req.unit()))
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unit does not match factor unit: expected " + factor.activityUnit);
-        BigDecimal allocation = req.allocationNumerator().divide(req.allocationDenominator(), 8, RoundingMode.HALF_UP);
-        BigDecimal kg = req.quantity().multiply(factor.factorValue).multiply(allocation).setScale(8, RoundingMode.HALF_UP);
+    public ActivityDto createActivity(@Valid @RequestBody ActivityRequest req, Authentication auth) {
+        boolean isAdmin = hasRole(auth, "ADMIN");
+        boolean isReviewer = hasRole(auth, "REVIEWER");
+
+        if (isReviewer) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Reviewers have read-only access and cannot create activity records.");
+        }
+
+        AppUser current = users.findByUsername(auth.getName()).orElseThrow(
+                () -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "User not authenticated")
+        );
+
+        // RBAC cross-organization write denial
+        if (!isAdmin && !current.organizationName.equalsIgnoreCase(req.organizationName().trim())) {
+            audit.save(new AuditEvent(auth.getName(), current.organizationName, "SECURITY_DENIAL", "EMISSION_ACTIVITY", null,
+                    "Attempted unauthorized cross-organization write for: " + req.organizationName()));
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "Access denied: Stakeholders can only record activities for their own organization ('" + current.organizationName + "').");
+        }
+
+        // Duplicate event key check (guard against double counting)
+        if (req.eventKey() != null && !req.eventKey().isBlank()) {
+            String trimmedKey = req.eventKey().trim();
+            if (activities.findByEventKey(trimmedKey).isPresent()) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "Physical emission event key '" + trimmedKey + "' already exists. Reuse existing record to prevent duplicate counting.");
+            }
+        }
+
+        // Look up factor
+        EmissionFactor factor = factors.findById(req.factorId()).orElseThrow(
+                () -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Emission factor with ID " + req.factorId() + " not found")
+        );
+
+        // Execute calculation engine
+        CalculationEngine.CalculationResult calc = calculationEngine.calculate(
+                req.quantity(),
+                req.unit(),
+                factor,
+                req.allocationNumerator(),
+                req.allocationDenominator(),
+                req.shippedMassTonnes(),
+                req.distanceKm(),
+                req.gasSpecificName()
+        );
+
+        boolean isMarketBased = (req.isScope2MarketBased() != null && req.isScope2MarketBased()) || factor.isMarketBasedAlternative;
+        boolean isBatchAllocated = req.isBatchProductAllocated() == null || req.isBatchProductAllocated();
+        String lifecycle = (req.lifecycleStage() != null && !req.lifecycleStage().isBlank()) ? req.lifecycleStage() : "CRADLE_TO_RETAIL";
 
         EmissionActivity a = new EmissionActivity();
-        a.organizationName=req.organizationName(); a.batchId=req.batchId(); a.stageName=req.stageName();
-        a.activityName=req.activityName(); a.scope=req.scope(); a.categoryCode=req.categoryCode();
-        a.quantity=req.quantity(); a.unit=req.unit(); a.factor=factor; a.factorSnapshot=factor.factorValue;
-        a.emissionsKg=kg; a.allocationNumerator=req.allocationNumerator(); a.allocationDenominator=req.allocationDenominator();
-        a.createdBy=auth.getName();
-        a.eventKey = req.eventKey() == null || req.eventKey().isBlank() ? null : req.eventKey().trim();
+        a.organizationName = req.organizationName().trim();
+        a.facilityCode = req.facilityCode();
+        a.batchId = req.batchId().trim();
+        a.stageSequence = req.stageSequence() != null ? req.stageSequence() : 1;
+        a.stageName = req.stageName().trim();
+        a.activityName = req.activityName().trim();
+        a.scope = req.scope().trim();
+        a.categoryCode = req.categoryCode().trim();
+
+        a.inputQuantity = req.quantity();
+        a.inputUnit = req.unit().trim();
+        a.standardQuantity = calc.standardQuantity();
+        a.standardUnit = calc.standardUnit();
+        a.unitConversionFactor = calc.conversionRatio();
+
+        a.factor = factor;
+        a.factorSnapshot = factor.factorValue;
+        a.gasSpecificName = req.gasSpecificName();
+        a.gasGwpValue = calc.gwpValue();
+
+        a.shippedMassTonnes = req.shippedMassTonnes();
+        a.distanceKm = req.distanceKm();
+        a.calculatedTonneKm = calc.tonneKm();
+
+        a.allocationNumerator = req.allocationNumerator();
+        a.allocationDenominator = req.allocationDenominator();
+        a.allocationPercent = calc.allocationPercent();
+
+        a.rawEmissionsKg = calc.rawEmissionsKg();
+        a.allocatedEmissionsKg = calc.allocatedEmissionsKg();
+
+        a.isScope2MarketBased = isMarketBased;
+        a.isBatchProductAllocated = isBatchAllocated;
+        a.lifecycleStage = lifecycle;
+
+        a.eventKey = (req.eventKey() == null || req.eventKey().isBlank()) ? null : req.eventKey().trim();
+        a.transferLegIdentifier = req.transferLegIdentifier();
         a.methodNote = req.methodNote();
+        a.assumptionsNote = req.assumptionsNote();
+        a.createdBy = auth.getName();
+
         EmissionActivity saved = activities.save(a);
-        audit.save(new AuditEvent(auth.getName(), current.organizationName, "CREATE", "EMISSION_ACTIVITY", String.valueOf(saved.id),
-            "Batch=" + saved.batchId + "; scope=" + saved.scope + "; category=" + saved.categoryCode + "; kgCO2e=" + saved.emissionsKg));
-        return dto(saved);
+
+        // Write audit entry
+        audit.save(new AuditEvent(auth.getName(), current.organizationName, "CREATE", "EMISSION_ACTIVITY",
+                String.valueOf(saved.id),
+                "Batch=" + saved.batchId + ", Stage=" + saved.stageName + ", Factor=" + factor.factorCode +
+                        ", AllocatedKg=" + saved.allocatedEmissionsKg));
+
+        return toDto(saved);
     }
 
+    @Operation(summary = "List activities (Admin/Reviewer see all; Stakeholders see own organization records)")
     @GetMapping("/activities")
-    List<ActivityDto> list(Authentication auth) {
-        if (hasRole(auth,"ADMIN") || hasRole(auth,"REVIEWER"))
-            return activities.findAllByOrderByCreatedAtDesc().stream().map(this::dto).toList();
-        AppUser user = users.findByUsername(auth.getName()).orElseThrow();
-        return activities.findByOrganizationNameOrderByCreatedAtDesc(user.organizationName).stream().map(this::dto).toList();
-    }
-
-    @GetMapping("/batches/{batchId}/summary")
-    SummaryDto summary(@PathVariable String batchId, Authentication auth) {
-        List<EmissionActivity> rows = activities.findByBatchIdOrderByCreatedAtAsc(batchId);
-        if (!hasRole(auth,"ADMIN") && !hasRole(auth,"REVIEWER")) {
-            String org = users.findByUsername(auth.getName()).orElseThrow().organizationName;
-            // Stakeholders may view only their own records in this starter. Add explicit linked-traceability permissions for the final assignment.
-            rows = rows.stream().filter(a -> a.organizationName.equals(org)).toList();
+    public List<ActivityDto> listActivities(Authentication auth) {
+        if (hasRole(auth, "ADMIN") || hasRole(auth, "REVIEWER")) {
+            return activities.findAllByOrderByCreatedAtDesc().stream().map(this::toDto).toList();
         }
-        BigDecimal total = rows.stream().map(a -> a.emissionsKg).reduce(BigDecimal.ZERO, BigDecimal::add);
-        Map<String,BigDecimal> byScope = group(rows, a -> a.scope);
-        Map<String,BigDecimal> byCategory = group(rows, a -> a.categoryCode);
-        Map<String,BigDecimal> byStage = group(rows, a -> a.stageName);
-        return new SummaryDto(batchId,total.setScale(4,RoundingMode.HALF_UP),
-            total.divide(new BigDecimal("1000"),8,RoundingMode.HALF_UP),byScope,byCategory,byStage,rows.stream().map(this::dto).toList());
+        AppUser user = users.findByUsername(auth.getName()).orElseThrow();
+        return activities.findByOrganizationNameOrderByCreatedAtDesc(user.organizationName).stream().map(this::toDto).toList();
     }
 
-    private Map<String,BigDecimal> group(List<EmissionActivity> rows, java.util.function.Function<EmissionActivity,String> key) {
-        return rows.stream().collect(Collectors.groupingBy(key, TreeMap::new,
-            Collectors.reducing(BigDecimal.ZERO, a -> a.emissionsKg, BigDecimal::add)));
+    @Operation(summary = "List supply chain transport legs")
+    @GetMapping("/transfers")
+    public List<StageTransfer> listTransfers(@RequestParam(required = false) String batchId) {
+        if (batchId != null && !batchId.isBlank()) {
+            return transfers.findByBatchIdOrderByStageSequenceAsc(batchId);
+        }
+        return transfers.findAll();
     }
+
+    @Operation(summary = "Comprehensive product batch footprint and journey summary with double-counting prevention")
+    @GetMapping("/batches/{batchId}/summary")
+    public BatchSummaryDto batchSummary(@PathVariable String batchId, Authentication auth) {
+        ProductBatch batch = batches.findByBatchId(batchId).orElseGet(() ->
+                new ProductBatch(batchId, "PROD-GENERIC", "Batch " + batchId,
+                        new BigDecimal("1000.0"), "unit", "2026-Q1", "Operational Control", "Summary view")
+        );
+
+        List<EmissionActivity> allBatchActivities = activities.findByBatchIdOrderByStageSequenceAscCreatedAtAsc(batchId);
+        List<StageTransfer> batchTransfers = transfers.findByBatchIdOrderByStageSequenceAsc(batchId);
+
+        // Filter activities contributing to the Reconciled Product Total:
+        // 1. Must be allocated to the batch (isBatchProductAllocated == true)
+        // 2. Scope 2 Market-Based entries are NOT added to location-based to prevent duplicate counting
+        List<EmissionActivity> productLedgerActivities = allBatchActivities.stream()
+                .filter(a -> Boolean.TRUE.equals(a.isBatchProductAllocated))
+                .filter(a -> !Boolean.TRUE.equals(a.isScope2MarketBased))
+                .toList();
+
+        // Scopes breakdown
+        BigDecimal scope1Kg = productLedgerActivities.stream()
+                .filter(a -> "SCOPE_1".equalsIgnoreCase(a.scope))
+                .map(a -> a.allocatedEmissionsKg)
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                .setScale(4, RoundingMode.HALF_UP);
+
+        BigDecimal scope2LocationKg = productLedgerActivities.stream()
+                .filter(a -> "SCOPE_2".equalsIgnoreCase(a.scope))
+                .map(a -> a.allocatedEmissionsKg)
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                .setScale(4, RoundingMode.HALF_UP);
+
+        BigDecimal scope3Kg = productLedgerActivities.stream()
+                .filter(a -> "SCOPE_3".equalsIgnoreCase(a.scope))
+                .map(a -> a.allocatedEmissionsKg)
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                .setScale(4, RoundingMode.HALF_UP);
+
+        BigDecimal totalProductFootprintKg = scope1Kg.add(scope2LocationKg).add(scope3Kg)
+                .setScale(4, RoundingMode.HALF_UP);
+
+        BigDecimal totalProductFootprintTonnes = totalProductFootprintKg
+                .divide(new BigDecimal("1000"), 6, RoundingMode.HALF_UP);
+
+        BigDecimal intensityPerUnit = (batch.quantity != null && batch.quantity.compareTo(BigDecimal.ZERO) > 0)
+                ? totalProductFootprintKg.divide(batch.quantity, 4, RoundingMode.HALF_UP)
+                : BigDecimal.ZERO;
+
+        // Cradle to retail vs Use and End-of-Life
+        BigDecimal cradleToRetailKg = productLedgerActivities.stream()
+                .filter(a -> "CRADLE_TO_RETAIL".equalsIgnoreCase(a.lifecycleStage))
+                .map(a -> a.allocatedEmissionsKg)
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                .setScale(4, RoundingMode.HALF_UP);
+
+        BigDecimal useAndEndOfLifeKg = totalProductFootprintKg.subtract(cradleToRetailKg)
+                .setScale(4, RoundingMode.HALF_UP);
+
+        // Scope 2 Market-Based alternative (calculated separately, NEVER added to location total!)
+        BigDecimal scope2MarketKg = allBatchActivities.stream()
+                .filter(a -> "SCOPE_2".equalsIgnoreCase(a.scope) && Boolean.TRUE.equals(a.isScope2MarketBased))
+                .map(a -> a.allocatedEmissionsKg)
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                .setScale(4, RoundingMode.HALF_UP);
+
+        Map<String, BigDecimal> emissionsByScope = new LinkedHashMap<>();
+        emissionsByScope.put("SCOPE_1", scope1Kg);
+        emissionsByScope.put("SCOPE_2_LOCATION", scope2LocationKg);
+        emissionsByScope.put("SCOPE_3", scope3Kg);
+
+        Map<String, BigDecimal> emissionsByCategory = productLedgerActivities.stream()
+                .collect(Collectors.groupingBy(a -> a.categoryCode, TreeMap::new,
+                        Collectors.reducing(BigDecimal.ZERO, a -> a.allocatedEmissionsKg, BigDecimal::add)));
+
+        Map<String, BigDecimal> emissionsByStakeholder = productLedgerActivities.stream()
+                .collect(Collectors.groupingBy(a -> a.organizationName, TreeMap::new,
+                        Collectors.reducing(BigDecimal.ZERO, a -> a.allocatedEmissionsKg, BigDecimal::add)));
+
+        // Stage Journey in sequence
+        Map<String, List<EmissionActivity>> stageGroups = productLedgerActivities.stream()
+                .collect(Collectors.groupingBy(a -> (a.stageSequence != null ? a.stageSequence : 1) + "::" + a.stageName + "::" + a.organizationName,
+                        LinkedHashMap::new, Collectors.toList()));
+
+        List<StageSummaryDto> journeyStages = new ArrayList<>();
+        BigDecimal runningTotal = BigDecimal.ZERO;
+
+        for (Map.Entry<String, List<EmissionActivity>> entry : stageGroups.entrySet()) {
+            String[] parts = entry.getKey().split("::");
+            int seq = Integer.parseInt(parts[0]);
+            String name = parts[1];
+            String org = parts[2];
+
+            BigDecimal stageIncremental = entry.getValue().stream()
+                    .map(a -> a.allocatedEmissionsKg)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add)
+                    .setScale(4, RoundingMode.HALF_UP);
+
+            runningTotal = runningTotal.add(stageIncremental);
+
+            BigDecimal pct = (totalProductFootprintKg.compareTo(BigDecimal.ZERO) > 0)
+                    ? stageIncremental.multiply(new BigDecimal("100")).divide(totalProductFootprintKg, 2, RoundingMode.HALF_UP)
+                    : BigDecimal.ZERO;
+
+            journeyStages.add(new StageSummaryDto(seq, name, org, stageIncremental, runningTotal, pct));
+        }
+
+        journeyStages.sort(Comparator.comparingInt(StageSummaryDto::stageSequence));
+
+        // Permitted activities view for caller: Admin & Reviewer see all, Stakeholder sees permitted records
+        List<EmissionActivity> userVisibleActivities = allBatchActivities;
+        if (auth != null && !hasRole(auth, "ADMIN") && !hasRole(auth, "REVIEWER")) {
+            AppUser u = users.findByUsername(auth.getName()).orElseThrow();
+            userVisibleActivities = allBatchActivities.stream()
+                    .filter(a -> a.organizationName.equalsIgnoreCase(u.organizationName))
+                    .toList();
+        }
+
+        return new BatchSummaryDto(
+                batchId,
+                batch.productCode,
+                batch.productName,
+                batch.quantity,
+                batch.unit,
+                batch.reportingPeriod,
+                batch.organizationalBoundary,
+                totalProductFootprintKg,
+                totalProductFootprintTonnes,
+                intensityPerUnit,
+                cradleToRetailKg,
+                cradleToRetailKg.divide(new BigDecimal("1000"), 6, RoundingMode.HALF_UP),
+                useAndEndOfLifeKg,
+                useAndEndOfLifeKg.divide(new BigDecimal("1000"), 6, RoundingMode.HALF_UP),
+                scope1Kg,
+                scope2LocationKg,
+                scope2MarketKg,
+                "Scope 2 location-based (" + scope2LocationKg + " kg) and market-based (" + scope2MarketKg +
+                        " kg) represent dual accounting alternatives under the GHG Protocol. They must NEVER be added together.",
+                scope3Kg,
+                emissionsByScope,
+                emissionsByCategory,
+                emissionsByStakeholder,
+                journeyStages,
+                batchTransfers,
+                userVisibleActivities.stream().map(this::toDto).toList(),
+                cradleToRetailKg.compareTo(BigDecimal.ZERO) > 0,
+                useAndEndOfLifeKg.compareTo(BigDecimal.ZERO) > 0,
+                "Double Counting Prevention: Product footprint totals unique physical emission events allocated to the batch once. Upstream supplier Scope 1 and Scope 2 emissions are not duplicate-counted alongside buyer Scope 3 Category 1 events."
+        );
+    }
+
+    @Operation(summary = "Corporate Greenhouse Gas Inventory breakdown comparing organization boundaries with reconciled product batch footprint")
+    @GetMapping("/reports/organization-inventory")
+    public CorporateInventoryReportDto corporateInventoryReport() {
+        List<EmissionActivity> all = activities.findAll();
+        Map<String, List<EmissionActivity>> orgMap = all.stream()
+                .collect(Collectors.groupingBy(a -> a.organizationName, TreeMap::new, Collectors.toList()));
+
+        List<OrgInventoryRowDto> rows = new ArrayList<>();
+        BigDecimal totalCorporateSum = BigDecimal.ZERO;
+
+        for (Map.Entry<String, List<EmissionActivity>> entry : orgMap.entrySet()) {
+            String orgName = entry.getKey();
+            List<EmissionActivity> list = entry.getValue();
+
+            BigDecimal s1 = list.stream().filter(a -> "SCOPE_1".equalsIgnoreCase(a.scope))
+                    .map(a -> a.rawEmissionsKg).reduce(BigDecimal.ZERO, BigDecimal::add);
+            BigDecimal s2Loc = list.stream().filter(a -> "SCOPE_2".equalsIgnoreCase(a.scope) && !Boolean.TRUE.equals(a.isScope2MarketBased))
+                    .map(a -> a.rawEmissionsKg).reduce(BigDecimal.ZERO, BigDecimal::add);
+            BigDecimal s2Mkt = list.stream().filter(a -> "SCOPE_2".equalsIgnoreCase(a.scope) && Boolean.TRUE.equals(a.isScope2MarketBased))
+                    .map(a -> a.rawEmissionsKg).reduce(BigDecimal.ZERO, BigDecimal::add);
+            BigDecimal s3 = list.stream().filter(a -> "SCOPE_3".equalsIgnoreCase(a.scope))
+                    .map(a -> a.rawEmissionsKg).reduce(BigDecimal.ZERO, BigDecimal::add);
+
+            BigDecimal orgTotal = s1.add(s2Loc).add(s3);
+            totalCorporateSum = totalCorporateSum.add(orgTotal);
+
+            String role = organizations.findByName(orgName).map(o -> o.stakeholderRole).orElse("STAKEHOLDER");
+            rows.add(new OrgInventoryRowDto(orgName, role, s1, s2Loc, s2Mkt, s3, orgTotal));
+        }
+
+        // Product Footprint Reconciled Total (sum of unique physical events once)
+        BigDecimal reconciledBatchTotal = all.stream()
+                .filter(a -> Boolean.TRUE.equals(a.isBatchProductAllocated))
+                .filter(a -> !Boolean.TRUE.equals(a.isScope2MarketBased))
+                .map(a -> a.allocatedEmissionsKg)
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                .setScale(4, RoundingMode.HALF_UP);
+
+        BigDecimal delta = totalCorporateSum.subtract(reconciledBatchTotal);
+
+        return new CorporateInventoryReportDto(
+                "2026-Q1",
+                rows,
+                totalCorporateSum.setScale(4, RoundingMode.HALF_UP),
+                reconciledBatchTotal,
+                delta.setScale(4, RoundingMode.HALF_UP),
+                "If every stakeholder's corporate inventory is summed without event reconciliation, " +
+                        totalCorporateSum.setScale(2, RoundingMode.HALF_UP) + " kg CO2e is computed. " +
+                        "The reconciled unique physical event ledger allocates each event once, yielding " +
+                        reconciledBatchTotal.setScale(2, RoundingMode.HALF_UP) + " kg CO2e, eliminating " +
+                        delta.setScale(2, RoundingMode.HALF_UP) + " kg CO2e in double-counted boundaries."
+        );
+    }
+
+    @Operation(summary = "Audit event log (Admin/Reviewer see all; Stakeholder sees own organization)")
+    @GetMapping("/audit")
+    public List<AuditEvent> auditEvents(Authentication auth) {
+        boolean isAdmin = hasRole(auth, "ADMIN");
+        boolean isReviewer = hasRole(auth, "REVIEWER");
+        AppUser current = users.findByUsername(auth.getName()).orElseThrow();
+
+        if (isAdmin || isReviewer) {
+            return audit.findAllByOrderByCreatedAtDesc();
+        }
+        return audit.findByOrganizationNameOrderByCreatedAtDesc(current.organizationName);
+    }
+
+    // --- Helper Methods ---
+
     private boolean hasRole(Authentication a, String role) {
-        return a.getAuthorities().stream().map(GrantedAuthority::getAuthority).anyMatch(x -> x.equals("ROLE_"+role));
+        if (a == null) return false;
+        return a.getAuthorities().stream()
+                .map(GrantedAuthority::getAuthority)
+                .anyMatch(x -> x.equals("ROLE_" + role));
     }
-    private ActivityDto dto(EmissionActivity a) {
-        BigDecimal pct=a.allocationNumerator.multiply(new BigDecimal("100")).divide(a.allocationDenominator,4,RoundingMode.HALF_UP);
-        return new ActivityDto(a.id,a.organizationName,a.batchId,a.stageName,a.activityName,a.scope,a.categoryCode,
-            a.quantity,a.unit,a.factor.id,a.factor.name,a.factorSnapshot,a.emissionsKg,pct,a.createdBy,a.createdAt.toString(),a.eventKey,a.methodNote);
+
+    private ActivityDto toDto(EmissionActivity a) {
+        return new ActivityDto(
+                a.id,
+                a.organizationName,
+                a.facilityCode,
+                a.batchId,
+                a.stageSequence,
+                a.stageName,
+                a.activityName,
+                a.scope,
+                a.categoryCode,
+                a.inputQuantity,
+                a.inputUnit,
+                a.standardQuantity,
+                a.standardUnit,
+                a.unitConversionFactor,
+                a.factor.id,
+                a.factor.factorCode,
+                a.factor.name,
+                a.factorSnapshot,
+                a.gasSpecificName,
+                a.gasGwpValue,
+                a.shippedMassTonnes,
+                a.distanceKm,
+                a.calculatedTonneKm,
+                a.allocationNumerator,
+                a.allocationDenominator,
+                a.allocationPercent,
+                a.rawEmissionsKg,
+                a.allocatedEmissionsKg,
+                a.isScope2MarketBased,
+                a.isBatchProductAllocated,
+                a.lifecycleStage,
+                a.eventKey,
+                a.transferLegIdentifier,
+                a.methodNote,
+                a.assumptionsNote,
+                a.createdBy,
+                a.createdAt.toString()
+        );
     }
 }
