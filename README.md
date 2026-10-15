@@ -123,3 +123,4 @@ The current JPA schema includes `app_users`, `emission_factors`, `emission_activ
 - OpenAPI notes, working guide and ER diagram: `docs/`
 
 Keep the two code directories in separate GitHub repositories if the evaluator requires separate frontend and backend repositories. Do not commit real database passwords, API keys or production secrets.
+"# carbon_calculatora" 
